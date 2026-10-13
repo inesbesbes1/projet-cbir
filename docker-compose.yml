@@ -1,0 +1,35 @@
+services:
+  elasticsearch:
+    image: elasticsearch:7.17.13
+    container_name: cbir-elasticsearch
+    environment:
+      - discovery.type=single-node
+      - xpack.security.enabled=false
+      - "ES_JAVA_OPTS=-Xms512m -Xmx512m"
+    ports:
+      - "9200:9200"
+    volumes:
+      - es_data:/usr/share/elasticsearch/data
+    healthcheck:
+      test: ["CMD-SHELL", "curl -s http://localhost:9200 >/dev/null || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  api:
+    build: .
+    container_name: cbir-app
+    ports:
+      - "8000:8000"
+    environment:
+      - ES_URL=http://elasticsearch:9200
+      - ES_INDEX=cbir_images
+    volumes:
+      - ./data:/app/data:ro
+      - ./index:/app/index
+    depends_on:
+      elasticsearch:
+        condition: service_healthy
+
+volumes:
+  es_data:

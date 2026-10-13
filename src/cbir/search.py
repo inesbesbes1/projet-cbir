@@ -64,7 +64,12 @@ def _get_index(index_file: str = "index.pkl") -> dict:
     return _index_cache
 
 
-def _run_search(image: Image.Image, descriptor_name: str, k: int) -> list[dict]:
+def _run_search(
+    image: Image.Image,
+    descriptor_name: str,
+    k: int,
+    candidate_ids: list[str] | set[str] | None = None,
+) -> list[dict]:
     """
     Logique commune : extrait le vecteur, cherche dans l'index, retourne
     une liste de dicts {"id": chemin_relatif, "distance": float}.
@@ -81,13 +86,43 @@ def _run_search(image: Image.Image, descriptor_name: str, k: int) -> list[dict]:
     full_index = _get_index()
     desc_index = get_descriptor_index(full_index, descriptor.name)
 
+    # Filtrage par candidats (utilisé pour la recherche combinée texte ET image)
+    if candidate_ids is not None:
+        c_set = set()
+        for cid in candidate_ids:
+            clean = cid.replace("\\", "/")
+            for prefix in ("objects/", "mirflickr/"):
+                if clean.startswith(prefix):
+                    clean = clean[len(prefix):]
+                    break
+            c_set.add(clean)
+
+        target_index = {}
+        for path, vec in desc_index.items():
+            clean_path = path.replace("\\", "/")
+            for prefix in ("objects/", "mirflickr/"):
+                if clean_path.startswith(prefix):
+                    clean_path = clean_path[len(prefix):]
+                    break
+            if clean_path in c_set:
+                target_index[path] = vec
+    else:
+        target_index = desc_index
+
     distance_fn = get_distance(DEFAULT_DISTANCE.get(descriptor_name, "chi2"))
 
-    raw = linear.search(query_vector, desc_index, distance_fn, k=k)
+    raw = linear.search(query_vector, target_index, distance_fn, k=k)
 
-    # Normaliser le séparateur pour l'ID (toujours slash, compatible URL)
-    return [{"id": path.replace("\\", "/"), "distance": float(dist)}
-            for path, dist in raw]
+    # Normaliser le séparateur pour l'ID et retirer l'éventuel préfixe du dataset
+    results = []
+    for path, dist in raw:
+        clean_path = path.replace("\\", "/")
+        for prefix in ("objects/", "mirflickr/"):
+            if clean_path.startswith(prefix):
+                clean_path = clean_path[len(prefix):]
+                break
+        results.append({"id": clean_path, "distance": float(dist)})
+    return results
 
 
 # ── API publique ───────────────────────────────────────────────────────────────
@@ -132,6 +167,7 @@ def visual_search(
     query_image_id: str,
     descriptors: list[str],
     k: int = 20,
+    candidate_ids: list[str] | set[str] | None = None,
 ) -> list[dict]:
     """
     Recherche visuelle à partir d'une image déjà dans la base.
@@ -142,12 +178,16 @@ def visual_search(
         query_image_id  : chemin relatif de l'image dans data/ (ex: 'accordion/image_0001.jpg').
         descriptors     : liste de noms de descripteurs (ex: ['color', 'texture']).
         k               : nombre de résultats.
+        candidate_ids   : restreindre la recherche à ces identifiants (optionnel).
 
     Returns:
         Liste de dicts {"id": str, "distance": float}.
     """
     # Résoudre le chemin complet de l'image requête
-    img_path = DATA_DIR / dataset / query_image_id
+    clean_id = query_image_id.replace("\\", "/")
+    if clean_id.startswith(f"{dataset}/"):
+        clean_id = clean_id[len(dataset) + 1:]
+    img_path = DATA_DIR / dataset / clean_id
     if not img_path.exists():
         raise FileNotFoundError(f"Image introuvable : {img_path}")
 
@@ -158,14 +198,14 @@ def visual_search(
         descriptors = ["color"]
 
     if len(descriptors) == 1:
-        return _run_search(image, descriptors[0], k)
+        return _run_search(image, descriptors[0], k, candidate_ids=candidate_ids)
 
     # Fusion multi-descripteurs : moyenne des rangs
     from collections import defaultdict
     rank_sum: dict[str, float] = defaultdict(float)
 
     for desc_name in descriptors:
-        results = _run_search(image, desc_name, k * 2)
+        results = _run_search(image, desc_name, k * 2, candidate_ids=candidate_ids)
         for rank, item in enumerate(results):
             rank_sum[item["id"]] += rank  # plus le rang est petit, mieux c'est
 
@@ -179,16 +219,18 @@ def visual_search_image(
     image_bytes: bytes,
     descriptors: list[str],
     k: int = 20,
+    candidate_ids: list[str] | set[str] | None = None,
 ) -> list[dict]:
     """
     Recherche visuelle à partir d'une image uploadée (bytes bruts).
     Appelée par POST /search/upload de l'API.
 
     Args:
-        dataset     : nom du dataset ('objects').
-        image_bytes : contenu binaire de l'image uploadée.
-        descriptors : liste de noms de descripteurs.
-        k           : nombre de résultats.
+        dataset       : nom du dataset ('objects').
+        image_bytes   : contenu binaire de l'image uploadée.
+        descriptors   : liste de noms de descripteurs.
+        k             : nombre de résultats.
+        candidate_ids : restreindre la recherche à ces identifiants (optionnel).
 
     Returns:
         Liste de dicts {"id": str, "distance": float}.
@@ -199,14 +241,14 @@ def visual_search_image(
         descriptors = ["color"]
 
     if len(descriptors) == 1:
-        return _run_search(image, descriptors[0], k)
+        return _run_search(image, descriptors[0], k, candidate_ids=candidate_ids)
 
     # Fusion multi-descripteurs (même logique que visual_search)
     from collections import defaultdict
     rank_sum: dict[str, float] = defaultdict(float)
 
     for desc_name in descriptors:
-        results = _run_search(image, desc_name, k * 2)
+        results = _run_search(image, desc_name, k * 2, candidate_ids=candidate_ids)
         for rank, item in enumerate(results):
             rank_sum[item["id"]] += rank
 
