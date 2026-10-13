@@ -9,9 +9,7 @@
   <img src="https://img.shields.io/badge/License-Academic-lightgrey" alt="License">
 </p>
 
-An advanced **Multimodal Image and Text Search Engine (CBIR)** developed as part of the *Massive Multimedia Indexing and Retrieval* course at **SUP'COM**. 
-
-This system bridges the semantic gap by combining **classical computer vision descriptors** (Color HSV, Texture LBP, Shape HOG), **metric space indexing acceleration** (VP-Tree), **full-text lexical search** (Elasticsearch), and **hybrid multimodal rank fusion** (RRF / Borda Count) served through a high-performance **FastAPI** backend and an interactive **Web interface**.
+This project is a **multimodal image and text search engine** developed as part of the *Massive Multimedia Indexing and Retrieval* course at **SUP'COM**. It combines **visual descriptors** (HSV, LBP, HOG) with **Elasticsearch** for text search, a **FastAPI** backend, and a **web interface** for interactive image retrieval.
 
 ---
 
@@ -19,21 +17,25 @@ This system bridges the semantic gap by combining **classical computer vision de
 
 - [📂 Project Architecture](#-project-architecture)
 - [🚀 How It Works](#-how-it-works)
-  - [1. Visual Feature Extraction](#1-visual-feature-extraction)
-  - [2. Distance & Similarity Metrics](#2-distance--similarity-metrics)
-  - [3. Indexing & Optimization (VP-Tree vs Linear)](#3-indexing--optimization-vp-tree-vs-linear)
-  - [4. Lexical Search with Elasticsearch](#4-lexical-search-with-elasticsearch)
-  - [5. Multimodal Fusion Engine (Text AND/OR Image)](#5-multimodal-fusion-engine-text-andor-image)
-  - [6. Interactive Web Client](#6-interactive-web-client)
+  - [Visual Feature Extraction](#1-visual-feature-extraction)
+  - [Elasticsearch Integration](#2-elasticsearch-integration)
+  - [FastAPI Backend](#3-fastapi-backend)
+  - [Web Interface](#4-web-interface)
+  - [Multimodal Fusion](#5-multimodal-fusion)
 - [📸 Features](#-features)
 - [🛠️ Technology Stack](#%EF%B8%8F-technology-stack)
 - [🔧 How to Run the Project](#-how-to-run-the-project)
   - [Prerequisites](#prerequisites)
-  - [Option A: One-Command Run with Docker Compose](#option-a-one-command-run-with-docker-compose-recommended)
-  - [Option B: Manual Local Execution](#option-b-manual-local-execution)
+  - [Clone the Repository](#1-clone-the-repository)
+  - [Build and Run with Docker Compose](#2-build-and-run-with-docker-compose)
+  - [Manual Local Execution](#3-manual-local-execution)
+  - [Access the Application](#4-access-the-application)
 - [📂 Folder Structure](#-folder-structure)
 - [🛡️ Environment Variables](#%EF%B8%8F-environment-variables)
-- [📊 Evaluation & Benchmark Results](#-evaluation--benchmark-results)
+- [📊 Results](#-results)
+  - [Search by Text](#search-by-text)
+  - [Search by Image](#search-by-image)
+  - [Search by Text + Image](#search-by-text--image)
 - [🤝 Contributors](#-contributors)
 
 ---
@@ -42,170 +44,124 @@ This system bridges the semantic gap by combining **classical computer vision de
 
 ```mermaid
 flowchart TD
-    User([👤 User / Web Browser])
-
-    subgraph Frontend ["Client Web Interface (HTML5 / Vanilla CSS / JS)"]
-        UI["Search Interface\n• Keywords input\n• Drag-and-drop file upload\n• Descriptor toggles (Color, Texture, Shape)\n• Dynamic results gallery\n• Query-on-click re-ranking"]
-    end
-
-    subgraph Backend ["FastAPI Application (Port 8000)"]
-        API["FastAPI Endpoints\nPOST /search\nPOST /search/upload\nGET /images/{dataset}/{id}"]
-        Fusion["Multimodal Fusion Engine (cbir.fusion)\n• Reciprocal Rank Fusion (RRF)\n• Semantic Filtering & Visual Reranking (AND / OR)"]
-    end
-
-    subgraph TextEngine ["Text Search Service (Elasticsearch 7.x)"]
-        ES[("Elasticsearch Index: cbir_images\n• Accent-folded tokenizer\n• Porter stemmer\n• Fuzzy multi-match query")]
-    end
-
-    subgraph VisualEngine ["Visual CBIR Core (Offline & Online)"]
-        VExtract["Feature Extractors (OpenCV / scikit-image)\n• HSV 3D Histogram (128-d)\n• LBP Uniform Texture (26-d)\n• HOG Gradient Orientations (8100-d)"]
-        VStore[("index.pkl (36,580 Signatures)\n• Caltech-101 / Objects Dataset")]
-        VPTree["Vantage Point Tree (VP-Tree)\nAccelerated Nearest-Neighbor Search"]
-        Linear["Linear Scan Engine\nExhaustive Distance Comparison"]
-    end
-
-    User --> UI
-    UI -->|HTTP Requests| API
-    API -->|Keywords Query| ES
-    API -->|Uploaded Bytes or Image ID| VExtract
-    VExtract --> Linear
-    VExtract --> VPTree
-    Linear --> VStore
-    VPTree --> VStore
-    ES -->|Text Hits| Fusion
-    Linear -->|Visual Distances| Fusion
-    Fusion -->|Ranked Candidates| API
-    API -->|JSON Hits + Image Streams| UI
+    User([👤 User]) --> UI[Web Interface]
+    UI --> API[FastAPI Backend]
+    API --> ES[(Elasticsearch)]
+    API --> Visual[Visual Search Engine]
+    Visual --> HSV[HSV Color Descriptor]
+    Visual --> LBP[LBP Texture Descriptor]
+    Visual --> HOG[HOG Shape Descriptor]
+    ES --> Fusion[Multimodal Fusion]
+    Visual --> Fusion
+    Fusion --> API
+    API --> UI
 ```
 
 ---
 
 ## 🚀 How It Works
 
-### 1. Visual Feature Extraction
-The visual subsystem extracts invariant feature signatures directly from raw images:
-- **Color (HSV 3D Histogram)**: Converts RGB images to the Hue-Saturation-Value color space and calculates a 3D joint histogram with $(8 \times 4 \times 4) = 128$ bins. L1-normalized for illumination robustness.
-- **Texture (LBP - Local Binary Pattern)**: Circular uniform LBP with radius $R=3$ and $P=24$ neighbors. Rotation-invariant, capturing micro-surface roughness across $26$ uniform histogram bins.
-- **Shape / Gradients (HOG - Histogram of Oriented Gradients)**: Divides normalized $128 \times 128$ grayscale images into $8 \times 8$ pixel cells, binning gradient orientations into 9 angular directions with $2 \times 2$ block normalization ($8,100$-d vector).
+### 1. **Visual Feature Extraction**
+- Extracts visual features from images using **3 descriptors**:
+  - **HSV**: Captures the color distribution of the image.
+  - **LBP**: Captures the texture patterns of the image.
+  - **HOG**: Captures the shape and edge information of the image.
+- These features are used to compare images and find visually similar ones.
 
-### 2. Distance & Similarity Metrics
-Each descriptor uses its optimal metric:
-- **Chi-Square ($\chi^2$) Distance**: Used for normalized histograms (HSV and LBP) to account for variations across discrete bins.
-- **Euclidean ($L_2$) Distance**: Used for continuous gradient descriptors (HOG).
-- **Manhattan ($L_1$) Distance**: Fast absolute distance alternative.
+### 2. **Elasticsearch Integration**
+- Indexes all images with their **category names**, **tags**, and **titles** into Elasticsearch.
+- Supports **fuzzy matching**, **accent folding**, and **stemming** for accurate text search.
 
-### 3. Indexing & Optimization (VP-Tree vs Linear)
-- **Linear Search**: Exhaustively computes distances against all 9,145 images (reference baseline).
-- **VP-Tree (Vantage Point Tree)**: Partitions metric space hierarchically using vantage points and median hyper-spheres ($\mu$). Prunes branches satisfying the triangle inequality, cutting distance computations drastically.
+### 3. **FastAPI Backend**
+- Provides a **REST API** for handling search requests.
+- Users can search by **text**, **image**, or **both** and receive ranked results.
 
-### 4. Lexical Search with Elasticsearch
-- Indexes all 9,145 images from `data/objects` with category metadata, natural titles, and French/English synonym tags (`config/category_tags.json`).
-- Custom `folded` analyzer handles lowercase normalization, accent removal (`asciifolding`), and stemming (`porter_stem`).
-- Multi-field fuzzy matching (`category_words^3`, `tags^2`, `title`) accommodates typos and plurals.
+### 4. **Web Interface**
+- Built with **HTML, CSS, and JavaScript** (no heavy frameworks).
+- Supports **drag-and-drop image upload** and **keyword search**.
+- Click on any result image to search for similar images instantly.
 
-### 5. Multimodal Fusion Engine (Text AND/OR Image)
-- **Mode `AND` (Semantic Filtering + Visual Reranking)**: Elasticsearch first narrows the search space to the relevant concept (e.g. *water lily* or *watch*), then the visual engine ranks the candidate images by visual distance relative to the query image.
-- **Mode `OR` (Reciprocal Rank Fusion - RRF)**: Combines the top text candidates and top visual candidates using reciprocal rank scoring:
-  $$\text{Score}_{\text{RRF}}(d) = \sum_{m} \frac{w_m}{k_0 + \text{rank}_m(d)}$$
-
-### 6. Interactive Web Client
-- Built with pure Vanilla HTML5/CSS/JavaScript (no bulky framework dependencies).
-- Drag-and-drop file upload with real-time preview.
-- Multi-descriptor checkbox selector.
-- Click-on-result feature: Clicking any image immediately initiates a new search using that image as the query.
+### 5. **Multimodal Fusion**
+- Combines text and visual search results using **Reciprocal Rank Fusion (RRF)**.
+- Supports **AND** mode (text filters → visual reranking) and **OR** mode (merged results from both).
 
 ---
 
 ## 📸 Features
 
-- 🎯 **3 Visual Descriptors**: Color (HSV), Texture (LBP), Shape (HOG) with single or combined fusion.
-- ⚡ **Metric Acceleration**: VP-Tree structure reducing search time and distance calculations.
-- 🔤 **Smart Text Retrieval**: Elasticsearch with accent-folding, stemming, and typo tolerance.
-- 🔀 **Multimodal Fusion**: True `AND` / `OR` query composition combining text keywords and visual queries.
-- 🖼️ **Any Image Upload**: Upload any PNG/JPG photo from your computer or Google.
-- 🔄 **Re-query on Click**: Click any returned image to search for similar objects.
-- 🐳 **Dockerized Stack**: Fully reproducible deployment with Docker and Docker Compose.
+- 🎯 **3 Visual Descriptors**: Color (HSV), Texture (LBP), Shape (HOG)
+- ⚡ **VP-Tree Acceleration**: Faster search using metric tree indexing
+- 🔤 **Text Search**: Elasticsearch with fuzzy matching and stemming
+- 🔀 **Multimodal Search**: Combine text + image queries (AND / OR)
+- 🖼️ **Image Upload**: Upload any image from your computer
+- 🔄 **Click to Re-search**: Click any result to search with that image
+- 🐳 **Docker Ready**: One-command deployment with Docker Compose
 
 ---
 
 ## 🛠️ Technology Stack
 
-| Layer | Component | Description |
+| Component | Technology | Description |
 | :--- | :--- | :--- |
-| **Feature Extraction** | OpenCV, scikit-image, Pillow, NumPy | HSV histogram, Uniform LBP, HOG descriptors |
-| **Visual Search Index** | Python (Pickle / Custom VP-Tree) | 36,580 offline signatures & metric tree structure |
-| **Text Search Engine** | Elasticsearch 7.17 | Full-text indexing, multi-match, fuzzy search |
-| **Backend API** | FastAPI, Uvicorn, Pydantic | High-performance asynchronous REST API |
-| **Frontend UI** | HTML5, Vanilla CSS3, JavaScript (ES6) | Responsive client, drag-and-drop, query-on-click |
-| **Containerization** | Docker, Docker Compose | Multi-container setup for API and Elasticsearch |
+| **Feature Extraction** | OpenCV, scikit-image, NumPy | HSV, LBP, and HOG descriptors |
+| **Visual Index** | VP-Tree, Linear Search | Fast nearest-neighbor retrieval |
+| **Text Search** | Elasticsearch 7.17 | Full-text search with fuzzy matching |
+| **Backend** | FastAPI, Uvicorn | REST API server |
+| **Frontend** | HTML5, CSS3, JavaScript | Interactive web interface |
+| **Containerization** | Docker, Docker Compose | Easy deployment |
 
 ---
 
 ## 🔧 How to Run the Project
 
 ### Prerequisites
-- Python 3.10+ (if running locally)
-- [Docker Desktop](https://www.docker.com/products/docker-desktop/) installed and running (for Docker setup)
+- [Docker Desktop](https://www.docker.com/products/docker-desktop/) installed and running
+- Python 3.10+ (only for manual execution without Docker)
 
----
+### 1. Clone the Repository
+```bash
+git clone https://github.com/nesrine414/projet-cbir.git
+cd projet-cbir
+```
 
-### Option A: One-Command Run with Docker Compose (Recommended)
+### 2. Build and Run with Docker Compose
+```bash
+docker compose up --build
+```
 
-1. **Clone the repository:**
-   ```bash
-   git clone https://github.com/nesrine414/projet-cbir.git
-   cd projet-cbir
-   ```
+### 3. Manual Local Execution
 
-2. **Launch all services:**
-   ```bash
-   docker compose up --build
-   ```
+If you prefer to run without Docker:
 
-3. **Access the application:**
-   - **Web Interface:** [http://localhost:8000/web/](http://localhost:8000/web/)
-   - **Interactive API Documentation (Swagger):** [http://localhost:8000/docs](http://localhost:8000/docs)
-   - **Elasticsearch Cluster:** [http://localhost:9200](http://localhost:9200)
+```bash
+# Create virtual environment
+python -m venv .venv
+.venv\Scripts\activate        # Windows
+# source .venv/bin/activate   # Linux/Mac
 
----
+# Install dependencies
+pip install -r requirements.txt
 
-### Option B: Manual Local Execution
+# Start Elasticsearch (via Docker)
+docker run -d --name es-cbir -p 9200:9200 -e "discovery.type=single-node" -e "xpack.security.enabled=false" elasticsearch:7.17.13
 
-1. **Clone and setup virtual environment:**
-   ```powershell
-   git clone https://github.com/nesrine414/projet-cbir.git
-   cd projet-cbir
-   python -m venv .venv
-   .\.venv\Scripts\activate
-   pip install -r requirements.txt
-   ```
+# Build the visual index (run once)
+python scripts/build_index.py
 
-2. **Start Elasticsearch:**
-   - *Via Docker:*
-     ```powershell
-     docker run -d --name es-cbir -p 9200:9200 -e "discovery.type=single-node" -e "xpack.security.enabled=false" elasticsearch:7.17.13
-     ```
-   - *Or via local install:*
-     ```powershell
-     C:\Users\USER\elasticsearch\elasticsearch-7.3.0\bin\elasticsearch.bat
-     ```
+# Index data into Elasticsearch (run once)
+python scripts/ingest_es.py
 
-3. **Build the offline indexes (done once):**
-   ```powershell
-   # 1. Compute visual signatures for Caltech-101 (generates index/index.pkl)
-   python scripts/build_index.py
+# Start the API server
+uvicorn api.main:app --host 0.0.0.0 --port 8000 --reload
+```
 
-   # 2. Ingest metadata and categories into Elasticsearch
-   python scripts/ingest_es.py
-   ```
+### 4. Access the Application
 
-4. **Launch the FastAPI backend server:**
-   ```powershell
-   uvicorn api.main:app --host 0.0.0.0 --port 8000 --reload
-   ```
-
-5. **Open your browser:**
-   Visit **[http://localhost:8000/web/](http://localhost:8000/web/)**
+| Service | URL |
+| :--- | :--- |
+| **Web Interface** | [http://localhost:8000/web/](http://localhost:8000/web/) |
+| **API Docs (Swagger)** | [http://localhost:8000/docs](http://localhost:8000/docs) |
+| **Elasticsearch** | [http://localhost:9200](http://localhost:9200) |
 
 ---
 
@@ -213,88 +169,77 @@ Each descriptor uses its optimal metric:
 
 ```
 projet-cbir/
-├── api/                     # FastAPI backend application
-│   ├── main.py              # API routes (/search, /search/upload, /images, /health)
-│   └── schemas.py           # Pydantic request & response schemas
+├── api/                     # FastAPI backend
+│   ├── main.py              # API routes
+│   └── schemas.py           # Request/response models
 │
-├── config/                  # Configuration & dictionaries
-│   ├── category_tags.json   # Semantic keyword tags & translations for the 101 categories
+├── config/                  # Configuration files
+│   ├── category_tags.json   # Category tags and translations
 │   └── settings.py          # Environment settings
 │
-├── data/                    # Image datasets
-│   └── objects/             # Caltech-101 dataset (9,145 images in 101 categories)
+├── data/objects/             # Image dataset (Caltech-101)
 │
-├── index/                   # Precomputed index storage
-│   └── index.pkl            # Serialized visual descriptor signatures (307 MB)
+├── index/                   # Precomputed visual index
+│   └── index.pkl            # Serialized feature signatures
 │
-├── scripts/                 # Offline pipelines and benchmarks
-│   ├── build_index.py       # Offline visual signature extraction pipeline
-│   ├── ingest_es.py         # Elasticsearch document indexing pipeline
-│   └── benchmark.py         # Comparative benchmark: Linear vs VP-Tree
+├── scripts/                 # Offline pipelines
+│   ├── build_index.py       # Visual feature extraction
+│   ├── ingest_es.py         # Elasticsearch indexing
+│   └── benchmark.py         # Performance benchmarks
 │
-├── src/cbir/                # Core CBIR algorithmic package
-│   ├── descriptors/         # Visual feature extractors
-│   │   ├── base.py          # Abstract descriptor base class
-│   │   ├── color.py         # HSV 3D & RGB color histograms
-│   │   ├── texture.py       # Uniform rotation-invariant LBP
-│   │   └── shape.py         # Histogram of Oriented Gradients (HOG)
-│   ├── index/               # Index structures and search routines
-│   │   ├── linear.py        # Linear scan search implementation
-│   │   ├── store.py         # Index serialization and cache loader
-│   │   └── vptree.py        # Vantage Point Tree (VP-Tree) implementation
-│   ├── distances.py         # Distance functions (Chi-Square, L1, L2)
-│   ├── fusion.py            # Multimodal fusion (Reciprocal Rank Fusion & AND/OR)
-│   └── text_search.py       # Elasticsearch client and query logic
+├── src/cbir/                # Core CBIR library
+│   ├── descriptors/         # HSV, LBP, HOG extractors
+│   ├── index/               # Linear search & VP-Tree
+│   ├── distances.py         # Distance functions
+│   ├── fusion.py            # Multimodal fusion (RRF)
+│   └── text_search.py       # Elasticsearch client
 │
-├── tests/                   # Verification and test suites
-│   ├── test_descriptors.py  # Tests for HSV, LBP, and HOG extraction
-│   ├── test_distances.py    # Tests for metric distance functions
-│   ├── test_fusion.py       # Tests for multimodal RRF fusion
-│   └── test_search.py       # Integration tests for visual search API
+├── tests/                   # Unit tests
+├── web/                     # Frontend (HTML/CSS/JS)
 │
-├── web/                     # Web Frontend
-│   ├── css/style.css        # Clean responsive styles and layout
-│   ├── js/app.js            # Frontend logic, API calls, and DOM rendering
-│   └── index.html           # Main user interface
-│
-├── docker-compose.yml       # Docker Compose multi-container configuration
-├── Dockerfile               # Production Docker image build recipe
-└── requirements.txt         # Python project dependencies
+├── docker-compose.yml       # Docker Compose config
+├── Dockerfile               # Docker image recipe
+└── requirements.txt         # Python dependencies
 ```
 
 ---
 
 ## 🛡️ Environment Variables
 
-Copy `.env.example` to `.env` to customize settings:
+Create a `.env` file from the example:
+
+```bash
+cp .env.example .env
+```
 
 ```env
-# Elasticsearch Configuration
 ES_URL=http://localhost:9200
 ES_INDEX=cbir_images
-
-# Paths
 DATA_DIR=data/objects
 INDEX_DIR=index
 ```
 
 ---
 
-## 📊 Evaluation & Benchmark Results
+## 📊 Results
 
-Run the benchmark to compare linear scanning vs VP-Tree:
-```powershell
-python scripts/benchmark.py --descriptor hsv --n 50 --k 10
-```
+### Search by Text
+Enter keywords like **"watch"**, **"butterfly"**, or **"water lily"** to find matching images.
 
-### Benchmark Summary (Caltech-101, 9,145 Images)
+### Search by Image
+Upload any image to find visually similar images from the database.
 
-| Search Method | Average Query Time | Average Distance Computations | Speedup | Exact Match Accuracy |
-| :--- | :---: | :---: | :---: | :---: |
-| **Linear (Exhaustive)** | ~18.5 ms | 9,145 calculations | 1.0x | 100% |
-| **VP-Tree (Metric Tree)** | ~4.2 ms | ~1,250 calculations | **4.4x faster** | **100%** |
+### Search by Text + Image
+Combine a keyword and an uploaded image for **multimodal search**:
+- **AND mode**: Text narrows the results, then visual similarity reranks them.
+- **OR mode**: Merges both text and visual results using rank fusion.
 
-*Pruned calculations: **> 85% of distance evaluations avoided** via triangle inequality pruning with zero loss of accuracy.*
+### Benchmark: Linear Search vs VP-Tree
+
+| Method | Avg Query Time | Speedup |
+| :--- | :---: | :---: |
+| **Linear Search** | ~18.5 ms | 1.0x |
+| **VP-Tree** | ~4.2 ms | **4.4x faster** |
 
 ---
 
@@ -302,5 +247,5 @@ python scripts/benchmark.py --descriptor hsv --n 50 --k 10
 
 Project developed at **SUP'COM** (École Supérieure des Communications de Tunis):
 
-- **Inès Besbes** (Personne A - Moteur Vision & Indexation)
-- **Nesrine Hamrouni** (Personne B - Application, API, Recherche Textuelle & Fusion)
+- **Inès Besbes** — Visual Search Engine & Indexing
+- **Nesrine Hamrouni** — API, Text Search & Multimodal Fusion
