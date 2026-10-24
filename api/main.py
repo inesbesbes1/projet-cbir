@@ -18,6 +18,7 @@ from fastapi.responses import FileResponse, RedirectResponse  # noqa: E402
 from fastapi.staticfiles import StaticFiles  # noqa: E402
 
 from api.schemas import Hit, SearchRequest, SearchResponse  # noqa: E402
+from cbir.fusion import fuse_results  # noqa: E402
 import cbir.search as search_module  # noqa: E402
 from cbir.search import visual_search  # noqa: E402
 from cbir.text_search import ES_URL, search_text  # noqa: E402
@@ -58,10 +59,61 @@ def search(req: SearchRequest):
         raise HTTPException(404, f"Dataset inconnu : {req.dataset}")
     if not req.text and not req.query_image_id:
         raise HTTPException(422, "Donnez des mots-clés et/ou une image requête.")
-    if req.text and req.query_image_id:
-        raise HTTPException(501, "La fusion texte + image n'est pas encore implémentée.")
 
-    if req.text:  # recherche textuelle seule
+    # 1. Recherche combinée : Texte ET/OU Image
+    if req.text and req.query_image_id:
+        if req.operator.upper() == "AND":
+            try:
+                text_hits = search_text(req.text, dataset=req.dataset, k=200)
+            except ESConnectionError:
+                raise HTTPException(503, "Elasticsearch ne répond pas. Est-il démarré ?")
+            if not text_hits:
+                return SearchResponse(count=0, results=[])
+
+            candidate_ids = [h["id"] for h in text_hits]
+            try:
+                vis_hits = visual_search(
+                    req.dataset, req.query_image_id, req.descriptors, k=req.k, candidate_ids=candidate_ids
+                )
+            except NotImplementedError:
+                raise HTTPException(501, "La recherche visuelle n'est pas encore disponible.")
+
+            hits = [
+                Hit(
+                    id=h["id"],
+                    url=image_url(req.dataset, h["id"]),
+                    category=category_of(h["id"]),
+                    distance=h["distance"],
+                )
+                for h in vis_hits
+            ]
+            return SearchResponse(count=len(hits), results=hits)
+        else:  # OR
+            pool_size = max(req.k * 3, 60)
+            try:
+                text_hits = search_text(req.text, dataset=req.dataset, k=pool_size)
+            except ESConnectionError:
+                raise HTTPException(503, "Elasticsearch ne répond pas. Est-il démarré ?")
+            try:
+                vis_hits = visual_search(req.dataset, req.query_image_id, req.descriptors, k=pool_size)
+            except NotImplementedError:
+                raise HTTPException(501, "La recherche visuelle n'est pas encore disponible.")
+
+            fused = fuse_results(text_hits, vis_hits, operator="OR", k=req.k)
+            hits = [
+                Hit(
+                    id=h["id"],
+                    url=image_url(req.dataset, h["id"]),
+                    category=h["category"] or category_of(h["id"]),
+                    score=h.get("score"),
+                    distance=h.get("distance"),
+                )
+                for h in fused
+            ]
+            return SearchResponse(count=len(hits), results=hits)
+
+    # 2. Recherche textuelle seule
+    if req.text:
         try:
             found = search_text(req.text, dataset=req.dataset, k=req.k)
         except ESConnectionError:
@@ -70,20 +122,22 @@ def search(req: SearchRequest):
             Hit(id=h["id"], url=image_url(req.dataset, h["id"]), category=h["category"], score=h["score"])
             for h in found
         ]
-    else:  # recherche visuelle seule
-        try:
-            found = visual_search(req.dataset, req.query_image_id, req.descriptors, k=req.k)
-        except NotImplementedError:
-            raise HTTPException(501, "La recherche visuelle n'est pas encore disponible.")
-        hits = [
-            Hit(
-                id=h["id"],
-                url=image_url(req.dataset, h["id"]),
-                category=category_of(h["id"]),
-                distance=h["distance"],
-            )
-            for h in found
-        ]
+        return SearchResponse(count=len(hits), results=hits)
+
+    # 3. Recherche visuelle seule
+    try:
+        found = visual_search(req.dataset, req.query_image_id, req.descriptors, k=req.k)
+    except NotImplementedError:
+        raise HTTPException(501, "La recherche visuelle n'est pas encore disponible.")
+    hits = [
+        Hit(
+            id=h["id"],
+            url=image_url(req.dataset, h["id"]),
+            category=category_of(h["id"]),
+            distance=h["distance"],
+        )
+        for h in found
+    ]
     return SearchResponse(count=len(hits), results=hits)
 
 
@@ -99,8 +153,6 @@ async def search_upload(
     """Recherche par une image envoyée depuis l'ordinateur."""
     if dataset not in DATASETS:
         raise HTTPException(404, f"Dataset inconnu : {dataset}")
-    if text.strip():
-        raise HTTPException(501, "La fusion texte + image n'est pas encore implémentée.")
     if not (file.content_type or "").startswith("image/"):
         raise HTTPException(415, "Le fichier envoyé n'est pas une image.")
     data = await file.read()
@@ -114,6 +166,56 @@ async def search_upload(
     if fn is None:
         raise HTTPException(501, "La recherche par image envoyée n'est pas encore disponible.")
     names = [d.strip() for d in descriptors.split(",") if d.strip()]
+
+    # Cas 1 : Recherche combinée Texte ET/OU Image uploadée
+    if text.strip():
+        if operator.upper() == "AND":
+            try:
+                text_hits = search_text(text.strip(), dataset=dataset, k=200)
+            except ESConnectionError:
+                raise HTTPException(503, "Elasticsearch ne répond pas. Est-il démarré ?")
+            if not text_hits:
+                return SearchResponse(count=0, results=[])
+
+            candidate_ids = [h["id"] for h in text_hits]
+            try:
+                vis_hits = fn(dataset, data, names, k=k, candidate_ids=candidate_ids)
+            except NotImplementedError:
+                raise HTTPException(501, "La recherche par image envoyée n'est pas encore disponible.")
+            hits = [
+                Hit(
+                    id=h["id"],
+                    url=image_url(dataset, h["id"]),
+                    category=category_of(h["id"]),
+                    distance=h["distance"],
+                )
+                for h in vis_hits
+            ]
+            return SearchResponse(count=len(hits), results=hits)
+        else:  # OR
+            pool_size = max(k * 3, 60)
+            try:
+                text_hits = search_text(text.strip(), dataset=dataset, k=pool_size)
+            except ESConnectionError:
+                raise HTTPException(503, "Elasticsearch ne répond pas. Est-il démarré ?")
+            try:
+                vis_hits = fn(dataset, data, names, k=pool_size)
+            except NotImplementedError:
+                raise HTTPException(501, "La recherche par image envoyée n'est pas encore disponible.")
+            fused = fuse_results(text_hits, vis_hits, operator="OR", k=k)
+            hits = [
+                Hit(
+                    id=h["id"],
+                    url=image_url(dataset, h["id"]),
+                    category=h["category"] or category_of(h["id"]),
+                    score=h.get("score"),
+                    distance=h.get("distance"),
+                )
+                for h in fused
+            ]
+            return SearchResponse(count=len(hits), results=hits)
+
+    # Cas 2 : Recherche par image seule
     try:
         found = fn(dataset, data, names, k=max(1, min(k, 200)))
     except NotImplementedError:

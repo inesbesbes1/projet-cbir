@@ -103,8 +103,10 @@ _cache = _IndexCache()
 
 def _clean_id(raw_path: str) -> str:
     p = raw_path.replace("\\", "/")
-    if p.startswith("objects/"):
-        p = p[len("objects/"):]
+    for prefix in ("objects/", "mirflickr/"):
+        if p.startswith(prefix):
+            p = p[len(prefix):]
+            break
     return p
 
 
@@ -131,7 +133,23 @@ def _compute_distances(query: np.ndarray, info: dict) -> np.ndarray:
 
 # ── Main search ──────────────────────────────────────────────────────────────
 
-def _optimized_search(image: Image.Image, k: int) -> list[dict]:
+_DESCRIPTOR_KEYS = {
+    "color": {"hsv_8_4_4", "rgb_8_8_8"},
+    "hsv": {"hsv_8_4_4"},
+    "rgb": {"rgb_8_8_8"},
+    "texture": {"lbp_P24_R3"},
+    "lbp": {"lbp_P24_R3"},
+    "shape": {"hog_o9_c8x8_b2x2"},
+    "hog": {"hog_o9_c8x8_b2x2"},
+}
+
+
+def _optimized_search(
+    image: Image.Image,
+    k: int,
+    descriptors: list[str] | None = None,
+    candidate_ids: list[str] | set[str] | None = None,
+) -> list[dict]:
     """
     Multi-descriptor weighted fusion search.
 
@@ -148,14 +166,40 @@ def _optimized_search(image: Image.Image, k: int) -> list[dict]:
     if not _cache.descriptors:
         raise RuntimeError("Index vide. Lance : python scripts/build_index.py")
 
+    selected_keys = None
+    if descriptors and "auto" not in descriptors:
+        selected_keys = set()
+        for name in descriptors:
+            keys = _DESCRIPTOR_KEYS.get(name.lower())
+            if keys is None:
+                raise ValueError(f"Descripteur inconnu : {name}")
+            selected_keys.update(keys)
+
+    infos = [
+        info for info in _cache.descriptors
+        if selected_keys is None or info["key"] in selected_keys
+    ]
+    if not infos:
+        raise RuntimeError("Aucun descripteur demandé n'est disponible dans l'index.")
+
     n = _cache.n
-    fused = np.zeros(n, dtype=np.float64)
+    if candidate_ids is None:
+        candidate_indices = np.arange(n)
+    else:
+        candidates = {_clean_id(path) for path in candidate_ids}
+        candidate_indices = np.array(
+            [i for i, path in enumerate(_cache.all_paths) if _clean_id(path) in candidates],
+            dtype=np.intp,
+        )
+    if candidate_indices.size == 0 or k <= 0:
+        return []
+
+    fused = np.zeros(candidate_indices.size, dtype=np.float64)
     total_weight = 0.0
 
-    for info in _cache.descriptors:
+    for info in infos:
         query_vec = info["descriptor"].extract(image)
-        dists = _compute_distances(query_vec, info)
-
+        dists = _compute_distances(query_vec, info)[candidate_indices]
         # Min-max normalization to [0, 1]
         d_min = dists.min()
         d_max = dists.max()
@@ -163,7 +207,7 @@ def _optimized_search(image: Image.Image, k: int) -> list[dict]:
         if span > 1e-10:
             normed = (dists - d_min) / span
         else:
-            normed = np.zeros(n, dtype=np.float32)
+            normed = np.zeros(candidate_indices.size, dtype=np.float32)
 
         w = info["weight"]
         fused += w * normed
@@ -174,12 +218,15 @@ def _optimized_search(image: Image.Image, k: int) -> list[dict]:
         fused /= total_weight
 
     # Top-k
-    actual_k = min(k, n)
-    top_idx = np.argpartition(fused, actual_k)[:actual_k]
+    actual_k = min(k, candidate_indices.size)
+    top_idx = np.argpartition(fused, actual_k - 1)[:actual_k]
     sorted_idx = top_idx[np.argsort(fused[top_idx])]
 
     return [
-        {"id": _cache.all_paths[i], "distance": round(float(fused[i]), 6)}
+        {
+            "id": _cache.all_paths[candidate_indices[i]],
+            "distance": round(float(fused[i]), 6),
+        }
         for i in sorted_idx
     ]
 
@@ -197,7 +244,7 @@ def search(
     if not img_path.exists():
         raise FileNotFoundError(f"Image introuvable : {image_path}")
     image = Image.open(img_path).convert("RGB")
-    results = _optimized_search(image, k)
+    results = _optimized_search(image, k, [descriptor_name])
     return [(r["id"], r["distance"]) for r in results]
 
 
@@ -206,12 +253,31 @@ def visual_search(
     query_image_id: str,
     descriptors: list[str],
     k: int = 20,
+    candidate_ids: list[str] | set[str] | None = None,
 ) -> list[dict]:
-    img_path = DATA_DIR / dataset / query_image_id
+    """
+    Recherche visuelle à partir d'une image déjà dans la base.
+    Appelée par POST /search de l'API.
+
+    Args:
+        dataset         : nom du dataset ('objects').
+        query_image_id  : chemin relatif de l'image dans data/ (ex: 'accordion/image_0001.jpg').
+        descriptors     : liste de noms de descripteurs (ex: ['color', 'texture']).
+        k               : nombre de résultats.
+        candidate_ids   : restreindre la recherche à ces identifiants (optionnel).
+
+    Returns:
+        Liste de dicts {"id": str, "distance": float}.
+    """
+    # Résoudre le chemin complet de l'image requête
+    clean_id = query_image_id.replace("\\", "/")
+    if clean_id.startswith(f"{dataset}/"):
+        clean_id = clean_id[len(dataset) + 1:]
+    img_path = DATA_DIR / dataset / clean_id
     if not img_path.exists():
         raise FileNotFoundError(f"Image introuvable : {img_path}")
     image = Image.open(img_path).convert("RGB")
-    return _optimized_search(image, k)
+    return _optimized_search(image, k, descriptors, candidate_ids)
 
 
 def visual_search_image(
@@ -219,6 +285,21 @@ def visual_search_image(
     image_bytes: bytes,
     descriptors: list[str],
     k: int = 20,
+    candidate_ids: list[str] | set[str] | None = None,
 ) -> list[dict]:
+    """
+    Recherche visuelle à partir d'une image uploadée (bytes bruts).
+    Appelée par POST /search/upload de l'API.
+
+    Args:
+        dataset       : nom du dataset ('objects').
+        image_bytes   : contenu binaire de l'image uploadée.
+        descriptors   : liste de noms de descripteurs.
+        k             : nombre de résultats.
+        candidate_ids : restreindre la recherche à ces identifiants (optionnel).
+
+    Returns:
+        Liste de dicts {"id": str, "distance": float}.
+    """
     image = Image.open(io.BytesIO(image_bytes)).convert("RGB")
-    return _optimized_search(image, k)
+    return _optimized_search(image, k, descriptors, candidate_ids)

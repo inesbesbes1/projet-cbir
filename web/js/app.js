@@ -14,6 +14,7 @@ function applyMode() {
     const mode = $("mode").value;
     $("textbox").hidden = mode === "image";
     $("imagebox").hidden = mode === "text";
+    $("descs").hidden = mode === "text";
 }
 
 function showQuery(src, label) {
@@ -97,6 +98,10 @@ async function runSearch() {
     const mode = $("mode").value;
     const k = Number($("k").value) || 20;
     const dataset = $("dataset").value;
+    const descriptors = Array.from(
+        document.querySelectorAll("#descs input:checked"),
+        (input) => input.value
+    );
 
     if (mode === "text") {
         // Recherche textuelle
@@ -127,6 +132,9 @@ async function runSearch() {
         if (!queryImage && !uploadFile) {
             return setStatus("Choisissez une image : upload ou clic sur un resultat.", true);
         }
+        if (descriptors.length === 0) {
+            return setStatus("Selectionnez au moins un descripteur.", true);
+        }
 
         setStatus("Recherche en cours...");
         try {
@@ -137,7 +145,7 @@ async function runSearch() {
                 fd.append("file", uploadFile);
                 fd.append("dataset", dataset);
                 fd.append("k", String(k));
-                fd.append("descriptors", "auto");
+                fd.append("descriptors", descriptors.join(","));
                 fd.append("text", "");
                 res = await fetch("/search/upload", { method: "POST", body: fd });
             } else {
@@ -148,7 +156,7 @@ async function runSearch() {
                     body: JSON.stringify({
                         dataset,
                         query_image_id: queryImage,
-                        descriptors: ["auto"],
+                        descriptors,
                         k,
                     }),
                 });
