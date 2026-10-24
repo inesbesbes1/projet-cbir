@@ -1,8 +1,8 @@
-// Client web : appelle l'API (/search et /search/upload) et affiche la grille de résultats.
+// Client web : appelle l'API et affiche les resultats.
 const $ = (id) => document.getElementById(id);
 const MAX_BYTES = 10 * 1024 * 1024;
-let queryImage = null; // id d'une image de la base (clic sur un résultat)
-let uploadFile = null; // fichier envoyé depuis l'ordinateur
+let queryImage = null; // id d'une image de la base (clic sur un resultat)
+let uploadFile = null; // fichier envoye depuis l'ordinateur
 let previewUrl = null;
 
 function setStatus(message, isError = false) {
@@ -14,14 +14,13 @@ function applyMode() {
     const mode = $("mode").value;
     $("textbox").hidden = mode === "image";
     $("imagebox").hidden = mode === "text";
-    $("descs").hidden = mode === "text";
-    $("opwrap").hidden = mode !== "both";
 }
 
 function showQuery(src, label) {
     $("qimg").src = src;
     $("qname").textContent = label;
     $("query").hidden = false;
+    $("drop").hidden = true;
 }
 
 function clearQuery() {
@@ -31,12 +30,13 @@ function clearQuery() {
     previewUrl = null;
     $("file").value = "";
     $("query").hidden = true;
+    $("drop").hidden = false;
 }
 
 function handleFile(file) {
     if (!file) return;
     if (!["image/png", "image/jpeg"].includes(file.type)) {
-        setStatus("Format non accepté : utilisez une image PNG, JPG ou JPEG.", true);
+        setStatus("Format non accepte : utilisez PNG ou JPEG.", true);
         return;
     }
     if (file.size > MAX_BYTES) {
@@ -68,7 +68,8 @@ function render(results) {
         btn.addEventListener("click", () => {
             clearQuery();
             queryImage = hit.id;
-            showQuery(hit.url, hit.id);
+            showQuery(hit.url, hit.category || hit.id);
+            // Basculer en mode image si on etait en texte
             if ($("mode").value === "text") {
                 $("mode").value = "image";
                 applyMode();
@@ -94,55 +95,79 @@ function render(results) {
 
 async function runSearch() {
     const mode = $("mode").value;
-    const needText = mode !== "image";
-    const needImage = mode !== "text";
-    const text = $("text").value.trim();
-    const descriptors = [...document.querySelectorAll("#descs input:checked")].map((c) => c.value);
-    const base = { dataset: $("dataset").value, operator: $("operator").value, k: Number($("k").value) || 12 };
+    const k = Number($("k").value) || 20;
+    const dataset = $("dataset").value;
 
-    if (needText && !text) return setStatus("Saisissez des mots-clés.", true);
-    if (needImage && !queryImage && !uploadFile) {
-        return setStatus("Choisissez une image : envoi depuis l'ordinateur ou clic sur un résultat.", true);
-    }
-    if (needImage && descriptors.length === 0) return setStatus("Cochez au moins un descripteur.", true);
+    if (mode === "text") {
+        // Recherche textuelle
+        const text = $("text").value.trim();
+        if (!text) return setStatus("Saisissez des mots-cles.", true);
 
-    setStatus("Recherche en cours…");
-    try {
-        let res;
-        if (needImage && uploadFile) {
-            const fd = new FormData();
-            fd.append("file", uploadFile);
-            fd.append("dataset", base.dataset);
-            fd.append("operator", base.operator);
-            fd.append("k", String(base.k));
-            fd.append("descriptors", descriptors.join(","));
-            fd.append("text", needText ? text : "");
-            res = await fetch("/search/upload", { method: "POST", body: fd });
-        } else {
-            res = await fetch("/search", {
+        setStatus("Recherche en cours...");
+        try {
+            const res = await fetch("/search", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({
-                    ...base,
-                    text: needText ? text : null,
-                    query_image_id: needImage ? queryImage : null,
-                    descriptors: needImage ? descriptors : [],
-                }),
+                body: JSON.stringify({ dataset, text, k }),
             });
-        }
-        const data = await res.json();
-        if (!res.ok) {
+            const data = await res.json();
+            if (!res.ok) {
+                render([]);
+                return setStatus(typeof data.detail === "string" ? data.detail : "Erreur.", true);
+            }
+            render(data.results);
+            setStatus(data.count + " resultat(s)");
+        } catch (err) {
             render([]);
-            return setStatus(typeof data.detail === "string" ? data.detail : "Requête invalide.", true);
+            setStatus("Impossible de joindre l'API. Est-elle demarree ?", true);
         }
-        render(data.results);
-        setStatus(data.count + " résultat(s)");
-    } catch (err) {
-        render([]);
-        setStatus("Impossible de joindre l'API. Est-elle démarrée ?", true);
+
+    } else {
+        // Recherche visuelle
+        if (!queryImage && !uploadFile) {
+            return setStatus("Choisissez une image : upload ou clic sur un resultat.", true);
+        }
+
+        setStatus("Recherche en cours...");
+        try {
+            let res;
+            if (uploadFile) {
+                // Upload depuis l'ordinateur
+                const fd = new FormData();
+                fd.append("file", uploadFile);
+                fd.append("dataset", dataset);
+                fd.append("k", String(k));
+                fd.append("descriptors", "auto");
+                fd.append("text", "");
+                res = await fetch("/search/upload", { method: "POST", body: fd });
+            } else {
+                // Image de la base (clic sur un resultat)
+                res = await fetch("/search", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({
+                        dataset,
+                        query_image_id: queryImage,
+                        descriptors: ["auto"],
+                        k,
+                    }),
+                });
+            }
+            const data = await res.json();
+            if (!res.ok) {
+                render([]);
+                return setStatus(typeof data.detail === "string" ? data.detail : "Erreur.", true);
+            }
+            render(data.results);
+            setStatus(data.count + " resultat(s)");
+        } catch (err) {
+            render([]);
+            setStatus("Impossible de joindre l'API. Est-elle demarree ?", true);
+        }
     }
 }
 
+// Event listeners
 $("mode").addEventListener("change", applyMode);
 $("k").addEventListener("input", () => ($("kout").textContent = $("k").value));
 $("form").addEventListener("submit", (e) => {
